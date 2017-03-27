@@ -1,0 +1,7 @@
+**/.ipynb_checkpoints/**
+*.py[cod]
+*.so
+**/node_modules
+
+# Optional npm cache directory
+**.npm
