@@ -5,6 +5,7 @@ from __future__ import print_function
 
 from collections import defaultdict
 from gio_model import GioModel
+from constants import GioConstants
 
 import argparse
 import os
@@ -15,8 +16,13 @@ import tensorflow as tf
 
 FLAGS = None
 
-MAX_WIDTH, MAX_HEIGHT, MAX_TIME = 32, 32, 300
+MAX_WIDTH = 32
+MAX_HEIGHT = 32
+MAX_TIME = 300
+MIN_TIME = 50
+MAX_PLAYERS = 8
 MIN_TURNS = 150
+
 # Probability of selecting viewer from the rank array. Biased to selecting
 # players that performed well.
 VIEW_SELECT_PROBS = np.array([0.45, 0.25, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025])
@@ -33,6 +39,10 @@ def _float_feature(value):
   if type(value) == float:
     value = [value]
   return tf.train.Feature(float_list=tf.train.FloatList(value=value))
+
+
+def _feature_list(value):
+  return tf.train.FeatureList(feature=value)
 
 
 def valid_game(gio_model):
@@ -54,40 +64,83 @@ def normalize(board):
   board[:, :, :, 0] = minMaxNorm(board[:, :, :, 0])
 
 
-def build_example(model, hero_probs):
-  """Builds a TensorFlow.Example message from the model."""
-  # Point of view will be from hero (chosen from rank with hero_probs).
-  hero = np.random.choice(model.ranks, 1, p=hero_probs)
-  # Clip the number of turns
-  turn_clip = np.random.randint(min(MAX_TIME, model.num_turns))
-  model.clipBoard(turn_clip)
-  board = model.getBoardView(hero)
-  normalize(board)
-  scoreboard = model.getScoreBoard()
-  army = scoreboard['army']
-  forts = scoreboard['forts']
-  land = scoreboard['land']
-  army, land = map(minMaxNorm, (army, land))
+def switchView(score_vector, hero_index):
+  """Ensures the hero's score is at index 0."""
+  if hero_index == 0:
+    return score_vector
+  ret_vector = np.copy(score_vector)
+  tmp = ret_vector[0]
+  ret_vector[0] = ret_vector[hero_index]
+  ret_vector[hero_index] = tmp
+  return ret_vector
 
-  width, height = model.getMapSize()
-  return tf.train.Example(features=tf.train.Features(feature={
-      'width': _int64_feature(width),
-      'height': _int64_feature(height),
-      'num_players': _int64_feature(model.num_players),
-      'board': _float_feature(board.flatten()),
-      'army_count': _float_feature(army.flatten()),
-      'fort_count': _float_feature(forts.flatten()),
-      'land_count': _float_feature(land.flatten()),
-      # Label is the index in the rank vector.
-      'label': _int64_feature(map(int, np.array(model.ranks) == hero))
-    }))
+
+def widenScoreboard(board):
+  turns, num_players = board.shape
+  if num_players == MAX_PLAYERS:
+    return board
+  new_board = np.zeros((turns, MAX_PLAYERS))
+  new_board[:, :num_players] = board
+  return new_board
+
+
+def build_examples(model, hero_probs, examples_per_game):
+  """Builds a TensorFlow.Example message from the model."""
+  turn_clip = np.random.randint(MIN_TIME, min(MAX_TIME, model.num_turns))
+  model.clipBoard(turn_clip)
+  scoreboard = model.getScoreBoard()
+  # Player-vector. 1 if player at index is alive.
+  live_players = (scoreboard['army'][-1] > 0).astype(int)
+  # Update hero probabilities to ensure we always select a live player.
+  hero_probs = hero_probs * live_players
+  hero_probs /= np.sum(hero_probs)
+  # Number of examples to generate from this game. Max is # of live players.
+  num_views = min(np.sum(live_players), examples_per_game)
+  # Point of view (chosen from rank with hero_probs).
+  heroes = np.random.choice(model.ranks, num_views, replace=False, p=hero_probs)
+  examples = []
+  for hero in heroes:
+    # Clip the number of turns
+    board = model.getBoardView(hero)
+    normalize(board)
+    army = widenScoreboard(switchView(scoreboard['army'], hero))
+    forts = widenScoreboard(switchView(scoreboard['forts'], hero))
+    land = widenScoreboard(switchView(scoreboard['land'], hero))
+    army, land = map(minMaxNorm, (army, land))
+    label = np.where(model.ranks == hero)[0]
+
+    width, height = model.getMapSize()
+    # Fill into board with max-size.
+    max_board = np.zeros((turn_clip, MAX_WIDTH, MAX_HEIGHT, 3))
+    # Boards only differ in width and height. We fill the new empty max board
+    # with the values from the current board.
+    max_board[:, :board.shape[1], :board.shape[2], :] = board
+    # Flatten board on non-time dimensions
+    flattened_board = max_board.reshape([turn_clip, -1])
+    examples.append(tf.train.SequenceExample(
+        context=tf.train.Features(feature={
+          'width': _int64_feature(width),
+          'height': _int64_feature(height),
+          'num_players': _int64_feature(model.num_players),
+          'num_turns': _int64_feature(turn_clip),
+          # Label is the index in the rank vector.
+          'label': _int64_feature(label)
+        }),
+        feature_lists=tf.train.FeatureLists(feature_list={
+          'board': _feature_list(map(_float_feature, flattened_board)),
+          'army_count': _feature_list(map(_float_feature, army)),
+          'fort_count': _feature_list(map(_float_feature, forts)),
+          'land_count': _feature_list(map(_float_feature, land)),
+        })))
+  return examples
 
 
 def write_examples(game_ids, name, bias_hero=False):
   """Converts a dataset to tfrecords."""
   filename = os.path.join(FLAGS.out_dir, name + '.tfrecords')
   print('Writing', filename)
-  with tf.python_io.TFRecordWriter(filename) as writer:
+  with tf.python_io.TFRecordWriter(
+        filename, options=GioConstants.tf_record_options) as writer:
     for game_id in game_ids:
       model = get_model(game_id)
       if not valid_game(model):
@@ -98,15 +151,16 @@ def write_examples(game_ids, name, bias_hero=False):
       # Normalize probabilities.
       probs /= np.sum(probs)
       try:
-        example = build_example(model, probs)
+        examples = build_examples(model, probs, FLAGS.examples_per_game)
       except Exception as err:
         print('Error trying to write {}: {}'.format(model.id, err))
         counters['error'] += 1
         continue
-      writer.write(example.SerializeToString())
-      counters['written'] += 1
-      if counters['written'] % 10 == 0:
-        print('Written so far:', counters['written'])
+      for example in examples:
+        writer.write(example.SerializeToString())
+        counters['written'] += 1
+        if counters['written'] % 10 == 0:
+          print('Written so far:', counters['written'])
 
 
 def get_model(game_id):
@@ -116,8 +170,7 @@ def get_model(game_id):
 def main(unused_argv):
   get_game_id_fn = lambda path: path[:path.find('.')]
   all_game_ids = map(get_game_id_fn, os.listdir(FLAGS.in_dir))
-  # Reduce to 100 games for testing
-  all_game_ids = all_game_ids[:10000]
+  all_game_ids = all_game_ids[:FLAGS.num_games]
   num_games = len(all_game_ids)
   validation_end_idx = int(FLAGS.validation_ratio * num_games)
   test_end_idx = validation_end_idx + int(FLAGS.test_ratio * num_games)
@@ -159,6 +212,19 @@ if __name__ == '__main__':
       type=float,
       default=0.1,
       help='Ratio of data to write as test data.'
+  )
+  parser.add_argument(
+      '--num_games',
+      type=int,
+      default=100,
+      help='Number of games to generate examples from.'
+  )
+  parser.add_argument(
+      '--examples_per_game',
+      type=int,
+      default=1,
+      help="Number of examples per game. Each example will be point-of-view "
+           "some player, sampled without replacement."
   )
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
