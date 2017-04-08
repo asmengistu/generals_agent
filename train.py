@@ -13,9 +13,13 @@ import tensorflow as tf
 
 FLAGS = None
 
+BATCH_SIZE = 32
+RNN_HIDDEN_SIZE = 128
+LEARNING_RATE = 0.01
+
 
 def read_and_decode(filename_queue):
-  reader = tf.TFRecordReader(GioConstants.tf_record_options)
+  reader = tf.TFRecordReader(options=GioConstants.tf_record_options)
   _, serialized_example = reader.read(filename_queue)
   context_features_def = {
     'width': tf.FixedLenFeature([], dtype=tf.int64),
@@ -37,28 +41,40 @@ def read_and_decode(filename_queue):
   }
   context_features, sequence_features = tf.parse_single_sequence_example(
       serialized=serialized_example,
-      context_feature=context_features_def,
+      context_features=context_features_def,
       sequence_features=sequence_features_def)
+  width = tf.cast(context_features['width'], tf.float32)
+  height = tf.cast(context_features['height'], tf.float32)
+  num_players = tf.cast(context_features['num_players'], tf.float32)
+  num_turns = tf.cast(context_features['num_turns'], tf.float32)
   army_count = tf.cast(sequence_features['army_count'], tf.float32)
+  fort_count = tf.cast(sequence_features['fort_count'], tf.float32)
+  land_count = tf.cast(sequence_features['land_count'], tf.float32)
   label = tf.one_hot(tf.cast(context_features['label'], tf.int32),
                      depth=GioConstants.max_players)
-  return army_count, label
+  return (width,
+          height,
+          num_players,
+          num_turns,
+          army_count,
+          fort_count,
+          land_count,
+          label)
 
 
-def inputs(batch_size):
+def get_inputs(batch_size):
   with tf.name_scope('input'):
     filename_queue = tf.train.string_input_producer(
         [os.path.join(FLAGS.examples_dir, 'train.tfrecords')])
 
-    army_count, label = read_and_decode(filename_queue)
+    features = read_and_decode(filename_queue)
 
-    return tf.train.shuffle_batch(
-        [army_count, label],
+    return tf.train.batch(
+        features,
         batch_size=batch_size,
         num_threads=2,
         capacity=500 + 3 * batch_size,
-        # Ensures a minimum amount of shuffling of examples.
-        min_after_dequeue=500)
+        dynamic_pad=True)
 
 
 def main(unused_argv):
@@ -82,18 +98,52 @@ def main(unused_argv):
             worker_device="/job:worker/task:%d" % FLAGS.task_index,
             cluster=cluster)):
 
-      army_counts, labels = inputs(32)
+      (
+        width,
+        height,
+        num_players,
+        num_turns,
+        army_count,
+        fort_count,
+        land_count,
+        labels
+      ) = get_inputs(BATCH_SIZE)
 
-      lstm_cell = tf.contrib.rnn.BasicLSTMCell(64)
-      output, state = tf.nn.dynamic_rnn(lstm_cell, army_counts)
+      net = tf.stack([width, height, num_players, num_turns], 1)
 
-      logits = tf.contrib.layer.fully_connected()
+      for idx, seq_feature in enumerate((army_count, fort_count, land_count)):
+        with tf.variable_scope('lstm', reuse=(idx > 0)):
+          lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN_SIZE)
+          output, state = tf.nn.dynamic_rnn(lstm_cell,
+                                            seq_feature,
+                                            sequence_length=num_turns,
+                                            dtype=tf.float32,)
+          net = tf.concat([output[:, -1, :], net], 1)
+
+      logits = tf.contrib.layers.fully_connected(
+          inputs=net,
+          num_outputs=GioConstants.max_players)
       loss = tf.nn.softmax_cross_entropy_with_logits(labels=labels,
                                                      logits=logits)
+      tf.summary.scalar("loss", tf.reduce_mean(loss))
+
+      predicted_value = tf.argmax(logits, 1)
+      label_value = tf.argmax(labels, 1)
+      tf.summary.scalar(
+          "accuracy",
+          tf.reduce_mean(
+              tf.cast(tf.equal(predicted_value, label_value), tf.float32)))
+      tf.summary.scalar(
+          "l1_distance",
+          tf.reduce_mean(tf.abs(tf.subtract(predicted_value, label_value)))
+      )
+
+      for v in tf.trainable_variables():
+        tf.summary.histogram("Vars/" + v.name, v)
 
       global_step = tf.contrib.framework.get_or_create_global_step()
 
-      train_op = tf.train.AdagradOptimizer(0.01).minimize(
+      train_op = tf.train.AdagradOptimizer(LEARNING_RATE).minimize(
           loss, global_step=global_step)
 
     # The StopAtStepHook handles stopping after running given steps.
@@ -157,7 +207,7 @@ if __name__ == '__main__':
   parser.add_argument(
     "--num_steps",
       type=int,
-      default=1000000,
+      default=200000,
       help="Number of steps to train model for."
   )
   FLAGS, unparsed = parser.parse_known_args()
