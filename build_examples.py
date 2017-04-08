@@ -46,7 +46,7 @@ def _feature_list(value):
 
 
 def valid_game(gio_model):
-  if gio_model.num_turns < MIN_TURNS:
+  if gio_model.num_turns < GioConstants.min_turns:
     counters['valid under min turns'] += 1
     return False
   return True
@@ -77,16 +77,17 @@ def switchView(score_vector, hero_index):
 
 def widenScoreboard(board):
   turns, num_players = board.shape
-  if num_players == MAX_PLAYERS:
+  if num_players == GioConstants.max_players:
     return board
-  new_board = np.zeros((turns, MAX_PLAYERS))
+  new_board = np.zeros((turns, GioConstants.max_players))
   new_board[:, :num_players] = board
   return new_board
 
 
 def build_examples(model, hero_probs, examples_per_game):
   """Builds a TensorFlow.Example message from the model."""
-  turn_clip = np.random.randint(MIN_TIME, min(MAX_TIME, model.num_turns))
+  turn_clip = np.random.randint(GioConstants.min_time,
+                                min(GioConstants.max_time, model.num_turns))
   model.clipBoard(turn_clip)
   scoreboard = model.getScoreBoard()
   # Player-vector. 1 if player at index is alive.
@@ -111,7 +112,10 @@ def build_examples(model, hero_probs, examples_per_game):
 
     width, height = model.getMapSize()
     # Fill into board with max-size.
-    max_board = np.zeros((turn_clip, MAX_WIDTH, MAX_HEIGHT, 3))
+    max_board = np.zeros((turn_clip,
+                          GioConstants.max_width,
+                          GioConstants.max_height,
+                          GioConstants.num_channels))
     # Boards only differ in width and height. We fill the new empty max board
     # with the values from the current board.
     max_board[:, :board.shape[1], :board.shape[2], :] = board

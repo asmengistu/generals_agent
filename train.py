@@ -112,8 +112,10 @@ def main(unused_argv):
       net = tf.stack([width, height, num_players, num_turns], 1)
 
       for idx, seq_feature in enumerate((army_count, fort_count, land_count)):
-        with tf.variable_scope('lstm', reuse=(idx > 0)):
-          lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN_SIZE)
+        reuse_vars = (idx > 0)
+        with tf.variable_scope('lstm', reuse=reuse_vars):
+          lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN_SIZE,
+                                                   reuse=reuse_vars)
           output, state = tf.nn.dynamic_rnn(lstm_cell,
                                             seq_feature,
                                             sequence_length=num_turns,
