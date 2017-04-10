@@ -16,13 +16,6 @@ import tensorflow as tf
 
 FLAGS = None
 
-MAX_WIDTH = 32
-MAX_HEIGHT = 32
-MAX_TIME = 300
-MIN_TIME = 50
-MAX_PLAYERS = 8
-MIN_TURNS = 150
-
 # Probability of selecting viewer from the rank array. Biased to selecting
 # players that performed well.
 VIEW_SELECT_PROBS = np.array([0.45, 0.25, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025])
@@ -87,7 +80,7 @@ def widenScoreboard(board):
 def build_examples(model, hero_probs, examples_per_game):
   """Builds a TensorFlow.Example message from the model."""
   turn_clip = np.random.randint(GioConstants.min_time,
-                                min(GioConstants.max_time, model.num_turns))
+                                min(GioConstants.max_time, 0.8*model.num_turns))
   model.clipBoard(turn_clip)
   scoreboard = model.getScoreBoard()
   # Player-vector. 1 if player at index is alive.
