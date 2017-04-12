@@ -13,46 +13,46 @@ import tensorflow as tf
 
 FLAGS = None
 
-RNN_HIDDEN = 128
-CONV_HIDDEN = 128
+RNN_HIDDEN = 256
+CONV_HIDDEN = 512
 
 BATCH_SIZE = 16
-LEARNING_RATE = 0.01
+LEARNING_RATE = 0.001
 
 
 def read_and_decode(filename_queue):
   reader = tf.TFRecordReader(options=GioConstants.tf_record_options)
   _, serialized_example = reader.read(filename_queue)
   context_features_def = {
-    'width': tf.FixedLenFeature([], dtype=tf.int64),
-    'height': tf.FixedLenFeature([], dtype=tf.int64),
-    'num_players': tf.FixedLenFeature([], dtype=tf.int64),
-    'num_turns': tf.FixedLenFeature([], dtype=tf.int64),
-    'label': tf.FixedLenFeature([], dtype=tf.int64)
+    "width": tf.FixedLenFeature([], dtype=tf.int64),
+    "height": tf.FixedLenFeature([], dtype=tf.int64),
+    "num_players": tf.FixedLenFeature([], dtype=tf.int64),
+    "num_turns": tf.FixedLenFeature([], dtype=tf.int64),
+    "label": tf.FixedLenFeature([], dtype=tf.int64)
   }
   board_size = GioConstants.max_width * \
       GioConstants.max_height * GioConstants.num_channels
   sequence_features_def = {
-    'board': tf.FixedLenSequenceFeature([board_size], dtype=tf.float32),
-    'army_count': tf.FixedLenSequenceFeature([GioConstants.max_players],
+    "board": tf.FixedLenSequenceFeature([board_size], dtype=tf.float32),
+    "army_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
                                              dtype=tf.float32),
-    'fort_count': tf.FixedLenSequenceFeature([GioConstants.max_players],
+    "fort_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
                                              dtype=tf.float32),
-    'land_count': tf.FixedLenSequenceFeature([GioConstants.max_players],
+    "land_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
                                              dtype=tf.float32),
   }
   context_features, sequence_features = tf.parse_single_sequence_example(
       serialized=serialized_example,
       context_features=context_features_def,
       sequence_features=sequence_features_def)
-  width = tf.cast(context_features['width'], tf.float32)
-  height = tf.cast(context_features['height'], tf.float32)
-  num_players = tf.cast(context_features['num_players'], tf.float32)
-  num_turns = tf.cast(context_features['num_turns'], tf.int32)
-  board = tf.cast(sequence_features['board'], tf.float32)
-  army_count = tf.cast(sequence_features['army_count'], tf.float32)
-  land_count = tf.cast(sequence_features['land_count'], tf.float32)
-  label = tf.one_hot(tf.cast(context_features['label'], tf.int32),
+  width = tf.cast(context_features["width"], tf.float32)
+  height = tf.cast(context_features["height"], tf.float32)
+  num_players = tf.cast(context_features["num_players"], tf.float32)
+  num_turns = tf.cast(context_features["num_turns"], tf.int32)
+  board = tf.cast(sequence_features["board"], tf.float32)
+  army_count = tf.cast(sequence_features["army_count"], tf.float32)
+  land_count = tf.cast(sequence_features["land_count"], tf.float32)
+  label = tf.one_hot(tf.cast(context_features["label"], tf.int32),
                      depth=GioConstants.max_players)
   return (width,
           height,
@@ -65,9 +65,9 @@ def read_and_decode(filename_queue):
 
 
 def get_inputs(batch_size):
-  with tf.name_scope('input'):
+  with tf.name_scope("input"):
     filename_queue = tf.train.string_input_producer(
-        [os.path.join(FLAGS.examples_dir, 'train.tfrecords')])
+        [os.path.join(FLAGS.examples_dir, "train.tfrecords")])
 
     features = read_and_decode(filename_queue)
 
@@ -139,31 +139,33 @@ def main(unused_argv):
         conv_inputs = board[:, time, :, :, :]  # Shape (batch, 32, 32, 14)
 
         def apply_conv(reuse=True):
-          conv1 = tf.layers.conv2d(
-              inputs=conv_inputs,
-              filters=16,
-              kernel_size=3,
-              padding="same",
-              activation=tf.nn.elu)
-          pool1 = tf.layers.max_pooling2d(
-              inputs=conv1,
-              pool_size=[2, 2],
-              strides=2)
-          conv2 = tf.layers.conv2d(
-              inputs=pool1,
-              filters=32,
-              kernel_size=3,
-              padding="same",
-              activation=tf.nn.elu)
-          pool2 = tf.layers.max_pooling2d(
-              inputs=conv2,
-              pool_size=[2, 2],
-              strides=2)
-          final_width = int(GioConstants.max_width / 4)
-          final_height = int(GioConstants.max_height / 4)
-          pool2_flat = tf.reshape(pool2, [-1, final_width * final_height * 32])
-          ret = tf.contrib.layers.fully_connected(inputs=pool2_flat,
-                                                  num_outputs=CONV_HIDDEN)
+          with tf.variable_scope("board_conv", reuse=reuse):
+            conv1 = tf.layers.conv2d(
+                inputs=conv_inputs,
+                filters=16,
+                kernel_size=3,
+                padding="same",
+                activation=tf.nn.relu)
+            pool1 = tf.layers.max_pooling2d(
+                inputs=conv1,
+                pool_size=[2, 2],
+                strides=2)
+            conv2 = tf.layers.conv2d(
+                inputs=pool1,
+                filters=32,
+                kernel_size=3,
+                padding="same",
+                activation=tf.nn.relu)
+            pool2 = tf.layers.max_pooling2d(
+                inputs=conv2,
+                pool_size=[2, 2],
+                strides=2)
+            final_width = int(GioConstants.max_width / 4)
+            final_height = int(GioConstants.max_height / 4)
+            pool2_flat = tf.reshape(pool2,
+                                    [-1, final_width * final_height * 32])
+            ret = tf.contrib.layers.fully_connected(inputs=pool2_flat,
+                                                    num_outputs=CONV_HIDDEN)
           # ret shape is [batch_size, CONV_HIDDEN], reshape to
           # [batch_size, 1, CONV_HIDDEN] since we concatenate on time axis (1).
           return tf.reshape(ret, [BATCH_SIZE, 1, CONV_HIDDEN])
@@ -175,7 +177,7 @@ def main(unused_argv):
               conv_outs
           ], 1)
 
-        return (time + 1, conv_outs)
+        return (time + 8, conv_outs)
 
       max_seq_length = tf.cast(tf.reduce_max(num_turns), tf.int32)
       empty_conv_outs = tf.zeros([BATCH_SIZE, 0, CONV_HIDDEN], dtype=tf.float32)
@@ -187,17 +189,17 @@ def main(unused_argv):
           shape_invariants=(tf.TensorShape([]),
                             tf.TensorShape([BATCH_SIZE, None, CONV_HIDDEN])))
 
-      with tf.variable_scope('board_lstm'):
+      with tf.variable_scope("board_lstm"):
         lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN)
         output, state = tf.nn.dynamic_rnn(lstm_cell,
                                           conv_outs,
-                                          sequence_length=num_turns,
+                                          sequence_length=num_turns / 8,
                                           dtype=tf.float32)
         net = tf.concat([output[:, -1, :], net], 1)
 
       for idx, seq_feature in enumerate((army_count, land_count)):
         reuse_vars = (idx > 0)
-        with tf.variable_scope('score_lstm', reuse=reuse_vars):
+        with tf.variable_scope("score_lstm", reuse=reuse_vars):
           lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN,
                                                    reuse=reuse_vars)
           output, state = tf.nn.dynamic_rnn(lstm_cell,
@@ -221,7 +223,9 @@ def main(unused_argv):
               tf.cast(tf.equal(predicted_value, label_value), tf.float32)))
       tf.summary.scalar(
           "l1_distance",
-          tf.reduce_mean(tf.abs(tf.subtract(predicted_value, label_value)))
+          tf.reduce_mean(tf.cast(
+              tf.abs(tf.subtract(predicted_value, label_value)),
+              tf.float32))
       )
 
       for v in tf.trainable_variables():
@@ -250,19 +254,19 @@ def main(unused_argv):
         mon_sess.run(train_op)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      '--examples_dir',
+      "--examples_dir",
       type=str,
-      default='/Users/abel/data/gio/examples',
-      help='Directory that contains examples.'
+      default="/Users/abel/data/gio/examples",
+      help="Directory that contains examples."
   )
   parser.add_argument(
-      '--model_dir',
+      "--model_dir",
       type=str,
-      default='/Users/abel/data/gio/model',
-      help='Directory to write the model checkpoints and summaries to.'
+      default="/Users/abel/data/gio/model",
+      help="Directory to write the model checkpoints and summaries to."
   )
   # Flags for defining the tf.train.ClusterSpec
   parser.add_argument(
