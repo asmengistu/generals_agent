@@ -62,25 +62,26 @@ def switchView(score_vector, hero_index):
   if hero_index == 0:
     return score_vector
   ret_vector = np.copy(score_vector)
-  tmp = ret_vector[0]
-  ret_vector[0] = ret_vector[hero_index]
-  ret_vector[hero_index] = tmp
+  tmp = ret_vector[:, 0]
+  ret_vector[:, 0] = ret_vector[:, hero_index]
+  ret_vector[:, hero_index] = tmp
   return ret_vector
 
 
-def widenScoreboard(board):
-  turns, num_players = board.shape
+def widenScoreboard(scoreboard):
+  turns, num_players = scoreboard.shape
   if num_players == GioConstants.max_players:
-    return board
+    return scoreboard
   new_board = np.zeros((turns, GioConstants.max_players))
-  new_board[:, :num_players] = board
+  new_board[:, :num_players] = scoreboard
   return new_board
 
 
 def build_examples(model, hero_probs, examples_per_game):
   """Builds a TensorFlow.Example message from the model."""
   turn_clip = np.random.randint(GioConstants.min_time,
-                                min(GioConstants.max_time, 0.8*model.num_turns))
+                                min(GioConstants.max_time,
+                                    0.75 * model.num_turns))
   model.clipBoard(turn_clip)
   scoreboard = model.getScoreBoard()
   # Player-vector. 1 if player at index is alive.
@@ -91,7 +92,10 @@ def build_examples(model, hero_probs, examples_per_game):
   # Number of examples to generate from this game. Max is # of live players.
   num_views = min(np.sum(live_players), examples_per_game)
   # Point of view (chosen from rank with hero_probs).
-  heroes = np.random.choice(model.ranks, num_views, replace=False, p=hero_probs)
+  heroes = np.random.choice(model.num_players,
+                            num_views,
+                            replace=False,
+                            p=hero_probs)
   examples = []
   for hero in heroes:
     # Clip the number of turns
@@ -101,7 +105,7 @@ def build_examples(model, hero_probs, examples_per_game):
     forts = widenScoreboard(switchView(scoreboard['forts'], hero))
     land = widenScoreboard(switchView(scoreboard['land'], hero))
     army, land = map(minMaxNorm, (army, land))
-    label = np.where(model.ranks == hero)[0]
+    label = np.where(np.array(model.ranks) == hero)[0]
 
     width, height = model.getMapSize()
     # Fill into board with max-size.
@@ -164,6 +168,11 @@ def get_model(game_id):
     return GioModel.fromFile(FLAGS.in_dir + '/%s.giomodel.gz' % (game_id))
 
 
+def create_dirs():
+  if not os.path.isdir(FLAGS.out_dir):
+    os.makedirs(FLAGS.out_dir)
+
+
 def main(unused_argv):
   get_game_id_fn = lambda path: path[:path.find('.')]
   all_game_ids = map(get_game_id_fn, os.listdir(FLAGS.in_dir))
@@ -174,6 +183,8 @@ def main(unused_argv):
   validation_games = all_game_ids[:validation_end_idx]
   test_games = all_game_ids[validation_end_idx:test_end_idx]
   train_games = all_game_ids[test_end_idx:]
+
+  create_dirs()
 
   write_examples(test_games, 'test')
   write_examples(validation_games, 'validation')

@@ -77,7 +77,7 @@ def main():
       log_file = open(os.path.join(FLAGS.log_dir,
                                    FLAGS.run_name,
                                    "{}.log".format(idx)),
-                      'w')
+                      'a')
       log_file.write("\n# {}\n".format(time()))
       proc = Popen([cmd],
                    shell=True,
