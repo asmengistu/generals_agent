@@ -13,11 +13,15 @@ import tensorflow as tf
 
 FLAGS = None
 
-RNN_HIDDEN = 256
-CONV_HIDDEN = 512
+RNN_HIDDEN = 512
+RNN_STACK_SIZE = 3
+CONV_HIDDEN = 1024
+BOARD_TIMESTEP = 12
+SCORE_TIMESTEP = 12
+
 
 BATCH_SIZE = 16
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001
 
 
 def read_and_decode(filename_queue):
@@ -52,8 +56,8 @@ def read_and_decode(filename_queue):
   board = tf.cast(sequence_features["board"], tf.float32)
   army_count = tf.cast(sequence_features["army_count"], tf.float32)
   land_count = tf.cast(sequence_features["land_count"], tf.float32)
-  label = tf.one_hot(tf.cast(context_features["label"], tf.int32),
-                     depth=GioConstants.max_players)
+  label = tf.cast(context_features["label"], tf.float32)
+
   return (width,
           height,
           board,
@@ -114,7 +118,7 @@ def main(unused_argv):
       net = tf.stack([width, height, num_players, num_turns_float], 1)
 
       # Expand channel fields to one-hot vectors, increasing channels from 3 to
-      # 1 (Army) + 9 (Owners, none + max_players) + 4 (Types)
+      # 1 (Army) + 9 (Owners: no owner + max_players) + 5 (Types, counting null)
       board = tf.reshape(board, shape=[BATCH_SIZE,
                                        -1,
                                        GioConstants.max_width,
@@ -125,17 +129,18 @@ def main(unused_argv):
                                                      GioConstants.max_width,
                                                      GioConstants.max_height,
                                                      1])
-      # Owners starts at -1. Shift to start at 0 by adding 1.
+      # Owners starts at -1 (no owner).
       owners_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 1] + 1, tf.int32),
                                   depth=GioConstants.max_players + 1)
-      # Types starts at 1 and has depth 4.
-      types_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 2] - 1, tf.int32),
-                                 depth=4)
+      # Types starts at 1 and has depth 4. Non-game squares (fillers) are type
+      # 0, so we use depth 5 here.
+      types_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 2], tf.int32),
+                                 depth=5)
       board = tf.concat([army, owners_one_hot, types_one_hot], 4)
 
       # Apply convolutions. Since the number of turns is dynamic, we need
       # to use TensorFlow's control flow methods for stepping through time.
-      def _step(time, conv_outs):
+      def step(time, conv_outs):
         conv_inputs = board[:, time, :, :, :]  # Shape (batch, 32, 32, 14)
 
         def apply_conv(reuse=True):
@@ -177,59 +182,66 @@ def main(unused_argv):
               conv_outs
           ], 1)
 
-        return (time + 8, conv_outs)
+        return (time + BOARD_TIMESTEP, conv_outs)
 
       max_seq_length = tf.cast(tf.reduce_max(num_turns), tf.int32)
       empty_conv_outs = tf.zeros([BATCH_SIZE, 0, CONV_HIDDEN], dtype=tf.float32)
       _, conv_outs = tf.while_loop(
           cond=lambda time, *_: tf.less(time, max_seq_length),
-          body=_step,
+          body=step,
           loop_vars=(tf.constant(0), empty_conv_outs),
           # We need to set the time axis as one that changes (as we concat).
           shape_invariants=(tf.TensorShape([]),
                             tf.TensorShape([BATCH_SIZE, None, CONV_HIDDEN])))
 
       with tf.variable_scope("board_lstm"):
-        lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN)
-        output, state = tf.nn.dynamic_rnn(lstm_cell,
-                                          conv_outs,
-                                          sequence_length=num_turns / 8,
-                                          dtype=tf.float32)
+        cells = []
+        for i in range(RNN_STACK_SIZE):
+          cells.append(tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN))
+        stacked_lstms = tf.contrib.rnn.MultiRNNCell(cells)
+        conv_seq_lengths = num_turns / BOARD_TIMESTEP
+        output, _ = tf.nn.dynamic_rnn(stacked_lstms,
+                                      conv_outs,
+                                      sequence_length=conv_seq_lengths,
+                                      dtype=tf.float32)
         net = tf.concat([output[:, -1, :], net], 1)
 
       for idx, seq_feature in enumerate((army_count, land_count)):
         reuse_vars = (idx > 0)
         with tf.variable_scope("score_lstm", reuse=reuse_vars):
-          lstm_cell = tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN,
-                                                   reuse=reuse_vars)
-          output, state = tf.nn.dynamic_rnn(lstm_cell,
-                                            seq_feature,
-                                            sequence_length=num_turns,
-                                            dtype=tf.float32)
+          cells = []
+          for i in range(RNN_STACK_SIZE):
+            cells.append(tf.contrib.rnn.BasicLSTMCell(RNN_HIDDEN,
+                                                      reuse=reuse_vars))
+          stacked_lstms = tf.contrib.rnn.MultiRNNCell(cells)
+          # Go every SCORE_TIMESTEP turns on the time axis.
+          score_inputs = seq_feature[:, ::SCORE_TIMESTEP, :]
+          score_seq_lengths = num_turns / SCORE_TIMESTEP
+          output, _ = tf.nn.dynamic_rnn(stacked_lstms,
+                                        score_inputs,
+                                        sequence_length=score_seq_lengths,
+                                        dtype=tf.float32)
           net = tf.concat([output[:, -1, :], net], 1)
 
-      logits = tf.contrib.layers.fully_connected(
+      rank_preds = tf.contrib.layers.fully_connected(
           inputs=net,
-          num_outputs=GioConstants.max_players)
-      loss = tf.nn.softmax_cross_entropy_with_logits(labels=labels,
-                                                     logits=logits)
+          num_outputs=1)
+      labels = tf.reshape(labels, [-1, 1])
+      loss = tf.losses.absolute_difference(labels=labels,
+                                           predictions=rank_preds)
       tf.summary.scalar("loss", tf.reduce_mean(loss))
 
-      predicted_value = tf.argmax(logits, 1)
-      label_value = tf.argmax(labels, 1)
       tf.summary.scalar(
           "accuracy",
           tf.reduce_mean(
-              tf.cast(tf.equal(predicted_value, label_value), tf.float32)))
+              tf.cast(tf.equal(tf.round(rank_preds), labels), tf.float32)))
       tf.summary.scalar(
           "l1_distance",
-          tf.reduce_mean(tf.cast(
-              tf.abs(tf.subtract(predicted_value, label_value)),
-              tf.float32))
+          tf.reduce_mean(tf.abs(tf.subtract(rank_preds, labels)))
       )
 
-      for v in tf.trainable_variables():
-        tf.summary.histogram("Vars/" + v.name, v)
+      # for v in tf.trainable_variables():
+      #   tf.summary.histogram("Vars/" + v.name, v)
 
       global_step = tf.contrib.framework.get_or_create_global_step()
 
