@@ -113,8 +113,8 @@ def build_examples(model, hero_probs, examples_per_game):
                           GioConstants.max_width,
                           GioConstants.max_height,
                           GioConstants.num_channels))
-    # Set owner channel of non-game squares to -1.
-    max_board[:, :, :, 1] = -1
+    # Set owner and type channel of non-game squares to -1.
+    max_board[:, :, :, 1:] = -1
     # Boards only differ in width and height. We fill the new empty max board
     # with the values from the current board.
     max_board[:, :board.shape[1], :board.shape[2], :] = board
