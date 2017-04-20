@@ -18,4 +18,5 @@ class GioConstants(object):
   max_players = 8
   min_turns = 150
   num_channels = 3
+  batch_size = 16
   tf_record_options = TFRecordOptions(TFRecordCompressionType.GZIP)

@@ -1,18 +1,15 @@
 from collections import defaultdict
 
+from constants import GioConstants
+
+import gzip
+import json
 import numpy as np
 
-import json
-import gzip
-
 # Armies, Owners, Types
-NUM_CHANNELS = 3
 ARMY_CH = 0
 OWNER_CH = 1
 TYPE_CH = 2
-
-# When FoW is enabled, can't tell between forts and mountains.
-MOUNTAIN_OR_FORT = 5
 
 MOORE_NEIGHBORHOOD = np.array([
   (-1, -1), (-1, 0), (-1, 1),
@@ -50,7 +47,10 @@ class GioModel(object):
     self.afks = model['afks']
     self.ranks = model['ranks']
 
-    self.board_ = np.zeros((self.getNumTurns(), width, height, NUM_CHANNELS))
+    self.board_ = np.zeros((self.getNumTurns(),
+                           width,
+                           height,
+                           GioConstants.num_channels))
     board = self.board_
     board[0, :, :, ARMY_CH] = reshapeFn(model['armies'][0])
     board[0, :, :, OWNER_CH] = reshapeFn(model['owners'][0])
