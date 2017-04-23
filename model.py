@@ -9,8 +9,8 @@ import tensorflow as tf
 RNN_HIDDEN = 512
 RNN_STACK_SIZE = 2
 CONV_HIDDEN = 1024
-BOARD_TIMESTEP = 12
-SCORE_TIMESTEP = 12
+BOARD_TIMESTEP = 16
+SCORE_TIMESTEP = 16
 
 
 def get_last_relevant_layer(tensor, seq_lengths):
@@ -73,13 +73,13 @@ def get_loss(features):
                                                  1])
 
   # Expand channel fields to one-hot vectors, increasing channels from 3 to 16.
-  # 1 (Army) + 9 (Owners: none + max_players) + 5 (Types, incl. fog and void)
+  # 1 (Army) + 9 (Owners: none + max_players) + 7 (Types, incl. fog and void)
   # Owners starts at -1 (no owner).
   owners_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 1] + 1, tf.int32),
                               depth=GioConstants.max_players + 1)
   # -1: void, 0: fog, 1: empty, 2: mountain/fort, 3: fort, 4: general
   types_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 2] + 1, tf.int32),
-                             depth=6)
+                             depth=7)
   board = tf.concat([army, owners_one_hot, types_one_hot], 4)
 
   # Apply convolutions. Since the number of turns is dynamic, we need

@@ -77,23 +77,24 @@ def widenScoreboard(scoreboard):
   return new_board
 
 
-def build_examples(model, hero_probs, examples_per_game):
+def build_examples(model, hero_probs, examples_per_game, only_live=False):
   """Builds a TensorFlow.Example message from the model."""
   turn_clip = np.random.randint(GioConstants.min_time,
                                 min(GioConstants.max_time,
                                     0.75 * model.num_turns))
   model.clipBoard(turn_clip)
   scoreboard = model.getScoreBoard()
-  # Player-vector. 1 if player at index is alive.
-  live_players = (scoreboard['army'][-1] > 0).astype(int)
-  # Update hero probabilities to ensure we always select a live player.
-  hero_probs = hero_probs * live_players
+  if only_live:
+    # Player-vector. 1 if player at index is alive.
+    live_players = (scoreboard['army'][-1] > 0).astype(int)
+    # Update hero probabilities to ensure we always select a live player.
+    hero_probs = hero_probs * live_players
+    # Can't have more examples than live players if only_live.
+    examples_per_game = min(np.sum(live_players), examples_per_game)
   hero_probs /= np.sum(hero_probs)
-  # Number of examples to generate from this game. Max is # of live players.
-  num_views = min(np.sum(live_players), examples_per_game)
   # Point of view (chosen from rank with hero_probs).
   heroes = np.random.choice(model.num_players,
-                            num_views,
+                            examples_per_game,
                             replace=False,
                             p=hero_probs)
   examples = []

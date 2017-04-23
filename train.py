@@ -14,7 +14,7 @@ import tensorflow as tf
 
 FLAGS = None
 
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0002
 
 
 def read_and_decode(filename_queue):

@@ -119,7 +119,7 @@ class GioModel(object):
           else:
             cell_type = board[turn, i, j, TYPE_CH]
             if cell_type in (2, 3):
-              new_board[turn, i, j, TYPE_CH] = 2
+              new_board[turn, i, j, TYPE_CH] = 5
             new_board[turn, i, j, OWNER_CH] = -1
     return new_board
 
