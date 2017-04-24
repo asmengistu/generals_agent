@@ -77,7 +77,7 @@ def get_loss(features):
   # Owners starts at -1 (no owner).
   owners_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 1] + 1, tf.int32),
                               depth=GioConstants.max_players + 1)
-  # -1: void, 0: fog, 1: empty, 2: mountain/fort, 3: fort, 4: general
+  # -1: void, 0: fog, 1: empty, 2: mountain, 3: fort, 4: general, 5: mtn/fort
   types_one_hot = tf.one_hot(tf.cast(board[:, :, :, :, 2] + 1, tf.int32),
                              depth=7)
   board = tf.concat([army, owners_one_hot, types_one_hot], 4)
