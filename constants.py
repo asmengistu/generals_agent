@@ -13,10 +13,9 @@ class GioConstants(object):
   """Contains constants used across packages."""
   max_width = 32
   max_height = 32
-  max_time = 300
-  min_time = 50
+  max_time = 600
+  min_time = 150
   max_players = 8
-  min_turns = 150
   num_channels = 3
   batch_size = 16
   tf_record_options = TFRecordOptions(TFRecordCompressionType.GZIP)

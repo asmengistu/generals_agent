@@ -39,7 +39,7 @@ def _feature_list(value):
 
 
 def valid_game(gio_model):
-  if gio_model.num_turns < GioConstants.min_turns:
+  if gio_model.num_turns < GioConstants.min_time:
     counters['valid under min turns'] += 1
     return False
   return True
@@ -81,7 +81,7 @@ def build_examples(model, hero_probs, examples_per_game, only_live=False):
   """Builds a TensorFlow.Example message from the model."""
   turn_clip = np.random.randint(GioConstants.min_time,
                                 min(GioConstants.max_time,
-                                    0.75 * model.num_turns))
+                                    0.95 * model.num_turns))
   model.clipBoard(turn_clip)
   scoreboard = model.getScoreBoard()
   if only_live:
@@ -148,6 +148,8 @@ def write_examples(game_ids, name, bias_hero=False):
     for game_id in game_ids:
       model = get_model(game_id)
       if not valid_game(model):
+        continue
+      if model.num_players != 8:
         continue
       probs = np.ones(model.num_players)
       if bias_hero:

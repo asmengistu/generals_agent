@@ -64,17 +64,20 @@ def get_inputs(batch_size):
     return tf.train.batch(
         features,
         batch_size=batch_size,
-        num_threads=2,
+        num_threads=1,
         capacity=500 + 3 * batch_size,
         dynamic_pad=True)
 
 
 def main(unused_argv):
-  ps_hosts = FLAGS.ps_hosts.split(",")
+  ps_hosts = filter(bool, FLAGS.ps_hosts.split(","))
   worker_hosts = FLAGS.worker_hosts.split(",")
 
   # Create a cluster from the parameter server and worker hosts.
-  cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
+  spec = {"worker": worker_hosts}
+  if ps_hosts:
+    spec["ps"] = ps_hosts
+  cluster = tf.train.ClusterSpec(spec)
 
   # Create and start a server for the local task.
   server = tf.train.Server(cluster,
