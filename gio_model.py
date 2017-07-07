@@ -95,33 +95,63 @@ class GioModel(object):
     self.board_ = self.board_[:turn, :, :, :]
     self.num_turns = turn
 
+  def getBoardViewAtTurn(self, player, turn, new_board=None):
+    """Returns a 1st persion view from `player`s POV. Fog of war is type 0."""
+    if new_board is None:
+      new_board = np.zeros(self.board_.shape[1:])  # Ignore turn (time) axis
+    board = self.board_
+    width, height = self.getMapSize()
+    for i in xrange(width):
+      for j in xrange(height):
+        if self.isVisible(turn, i, j, player):
+          new_board[i, j, ARMY_CH] = board[turn, i, j, ARMY_CH]
+          # Owner is always 0.
+          owner = board[turn, i, j, OWNER_CH]
+          # Switch player index to 0.
+          if player != 0 and owner == 0:
+            new_board[i, j, OWNER_CH] = player
+          elif player != 0 and owner == player:
+            new_board[i, j, OWNER_CH] = 0
+          else:
+            new_board[i, j, OWNER_CH] = owner
+          # If visible type is just copied.
+          new_board[i, j, TYPE_CH] = board[turn, i, j, TYPE_CH]
+        else:
+          cell_type = board[turn, i, j, TYPE_CH]
+          if cell_type in (2, 3):
+            new_board[i, j, TYPE_CH] = 5
+          new_board[i, j, OWNER_CH] = -1
+    return new_board
+
   def getBoardView(self, player):
     """Returns a 1st persion view from `player`s POV. Fog of war is type 0."""
     new_board = np.zeros(self.board_.shape)
-    board = self.board_
     width, height = self.getMapSize()
     for turn in xrange(self.num_turns):
-      for i in xrange(width):
-        for j in xrange(height):
-          if self.isVisible(turn, i, j, player):
-            new_board[turn, i, j, ARMY_CH] = board[turn, i, j, ARMY_CH]
-            # Owner is always 0.
-            owner = board[turn, i, j, OWNER_CH]
-            # Switch player index to 0.
-            if player != 0 and owner == 0:
-              new_board[turn, i, j, OWNER_CH] = player
-            elif player != 0 and owner == player:
-              new_board[turn, i, j, OWNER_CH] = 0
-            else:
-              new_board[turn, i, j, OWNER_CH] = owner
-            # If visible type is just copied.
-            new_board[turn, i, j, TYPE_CH] = board[turn, i, j, TYPE_CH]
-          else:
-            cell_type = board[turn, i, j, TYPE_CH]
-            if cell_type in (2, 3):
-              new_board[turn, i, j, TYPE_CH] = 5
-            new_board[turn, i, j, OWNER_CH] = -1
+      new_board[turn, :, :, :] = self.getBoardViewAtTurn(player,
+                                                         turn,
+                                                         new_board[turn])
     return new_board
+
+  def getScoreBoardAtTurn(self, turn):
+    """Returns (army, fort, land) counts for all players at given turn."""
+    army = np.zeros(self.getNumPlayers())
+    forts = np.zeros(self.getNumPlayers())
+    land = np.zeros(self.getNumPlayers())
+    width, height = self.getMapSize()
+    for i in xrange(width):
+      for j in xrange(height):
+        owner = int(self.board_[turn][i, j, OWNER_CH])
+        if owner >= 0:
+          land[owner] += 1
+          army[owner] += self.board_[turn][i, j, ARMY_CH]
+          if self.board_[turn][i, j, TYPE_CH] in (3, 4):
+            forts[owner] += 1
+    return {
+      'army': army,
+      'forts': forts,
+      'land': land
+    }
 
   def getScoreBoard(self):
     """Returns (army, fort, land) counts for all players."""

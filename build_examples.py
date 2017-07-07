@@ -54,7 +54,7 @@ def minMaxNorm(values):
 
 def normalize(board):
   """Normalizes the board. Min-Max normalization for the army channel."""
-  board[:, :, :, 0] = minMaxNorm(board[:, :, :, 0])
+  board[:, :, 0] = minMaxNorm(board[:, :, 0])
 
 
 def switchView(score_vector, hero_index):
@@ -62,18 +62,18 @@ def switchView(score_vector, hero_index):
   if hero_index == 0:
     return score_vector
   ret_vector = np.copy(score_vector)
-  tmp = ret_vector[:, 0]
-  ret_vector[:, 0] = ret_vector[:, hero_index]
-  ret_vector[:, hero_index] = tmp
+  tmp = ret_vector[0]
+  ret_vector[0] = ret_vector[hero_index]
+  ret_vector[hero_index] = tmp
   return ret_vector
 
 
 def widenScoreboard(scoreboard):
-  turns, num_players = scoreboard.shape
+  num_players = len(scoreboard)
   if num_players == GioConstants.max_players:
     return scoreboard
-  new_board = np.zeros((turns, GioConstants.max_players))
-  new_board[:, :num_players] = scoreboard
+  new_board = np.zeros(GioConstants.max_players)
+  new_board[:num_players] = scoreboard
   return new_board
 
 
@@ -82,8 +82,8 @@ def build_examples(model, hero_probs, examples_per_game, only_live=False):
   turn_clip = np.random.randint(GioConstants.min_time,
                                 min(GioConstants.max_time,
                                     0.95 * model.num_turns))
-  model.clipBoard(turn_clip)
-  scoreboard = model.getScoreBoard()
+  # model.clipBoard(turn_clip)
+  scoreboard = model.getScoreBoardAtTurn(turn_clip)
   if only_live:
     # Player-vector. 1 if player at index is alive.
     live_players = (scoreboard['army'][-1] > 0).astype(int)
@@ -100,7 +100,7 @@ def build_examples(model, hero_probs, examples_per_game, only_live=False):
   examples = []
   for hero in heroes:
     # Clip the number of turns
-    board = model.getBoardView(hero)
+    board = model.getBoardViewAtTurn(hero, turn_clip)
     normalize(board)
     army = widenScoreboard(switchView(scoreboard['army'], hero))
     forts = widenScoreboard(switchView(scoreboard['forts'], hero))
@@ -109,32 +109,31 @@ def build_examples(model, hero_probs, examples_per_game, only_live=False):
     label = np.where(np.array(model.ranks) == hero)[0]
 
     width, height = model.getMapSize()
-    # Fill into board with max-size.
-    max_board = np.zeros((turn_clip,
-                          GioConstants.max_width,
+    # Set-up empty board with max-size.
+    max_board = np.zeros((GioConstants.max_width,
                           GioConstants.max_height,
                           GioConstants.num_channels))
+
     # Set owner and type channel of non-game squares to -1.
-    max_board[:, :, :, 1:] = -1
+    max_board[:, :, 1:] = -1
+
     # Boards only differ in width and height. We fill the new empty max board
     # with the values from the current board.
-    max_board[:, :board.shape[1], :board.shape[2], :] = board
+    max_board[:board.shape[0], :board.shape[1], :] = board
     # Flatten board on non-time dimensions
-    flattened_board = max_board.reshape([turn_clip, -1])
-    examples.append(tf.train.SequenceExample(
-        context=tf.train.Features(feature={
+    flattened_board = max_board.reshape([-1])
+    examples.append(tf.train.Example(
+        features=tf.train.Features(feature={
           'width': _int64_feature(width),
           'height': _int64_feature(height),
           'num_players': _int64_feature(model.num_players),
           'num_turns': _int64_feature(turn_clip),
+          'board': _float_feature(flattened_board),
+          'army_count': _float_feature(army),
+          'fort_count': _float_feature(forts),
+          'land_count': _float_feature(land),
           # Label is the index in the rank vector.
           'label': _int64_feature(label)
-        }),
-        feature_lists=tf.train.FeatureLists(feature_list={
-          'board': _feature_list(map(_float_feature, flattened_board)),
-          'army_count': _feature_list(map(_float_feature, army)),
-          'fort_count': _feature_list(map(_float_feature, forts)),
-          'land_count': _feature_list(map(_float_feature, land)),
         })))
   return examples
 
@@ -143,6 +142,7 @@ def write_examples(game_ids, name, bias_hero=False):
   """Converts a dataset to tfrecords."""
   filename = os.path.join(FLAGS.out_dir, name + '.tfrecords')
   print('Writing', filename)
+  import traceback
   with tf.python_io.TFRecordWriter(
         filename, options=GioConstants.tf_record_options) as writer:
     for game_id in game_ids:
@@ -160,6 +160,7 @@ def write_examples(game_ids, name, bias_hero=False):
         examples = build_examples(model, probs, FLAGS.examples_per_game)
       except Exception as err:
         print('Error trying to write {}: {}'.format(model.id, err))
+        print(traceback.format_exc())
         counters['error'] += 1
         continue
       for example in examples:

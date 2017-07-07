@@ -20,37 +20,35 @@ LEARNING_RATE = 0.0002
 def read_and_decode(filename_queue):
   reader = tf.TFRecordReader(options=GioConstants.tf_record_options)
   _, serialized_example = reader.read(filename_queue)
-  context_features_def = {
-    "width": tf.FixedLenFeature([], dtype=tf.int64),
-    "height": tf.FixedLenFeature([], dtype=tf.int64),
-    "num_players": tf.FixedLenFeature([], dtype=tf.int64),
-    "num_turns": tf.FixedLenFeature([], dtype=tf.int64),
-    "label": tf.FixedLenFeature([], dtype=tf.int64)
-  }
   board_size = GioConstants.max_width * \
       GioConstants.max_height * GioConstants.num_channels
-  sequence_features_def = {
-    "board": tf.FixedLenSequenceFeature([board_size], dtype=tf.float32),
-    "army_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
-                                             dtype=tf.float32),
-    "fort_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
-                                             dtype=tf.float32),
-    "land_count": tf.FixedLenSequenceFeature([GioConstants.max_players],
-                                             dtype=tf.float32),
+  features_def = {
+    'width': tf.FixedLenFeature([], dtype=tf.int64),
+    'height': tf.FixedLenFeature([], dtype=tf.int64),
+    'num_players': tf.FixedLenFeature([], dtype=tf.int64),
+    'num_turns': tf.FixedLenFeature([], dtype=tf.int64),
+    'board': tf.FixedLenFeature([board_size], dtype=tf.float32),
+    'army_count': tf.FixedLenFeature([GioConstants.max_players],
+                                     dtype=tf.float32),
+    'fort_count': tf.FixedLenFeature([GioConstants.max_players],
+                                     dtype=tf.float32),
+    'land_count': tf.FixedLenFeature([GioConstants.max_players],
+                                     dtype=tf.float32),
+    'label': tf.FixedLenFeature([], dtype=tf.int64)
   }
-  context_features, sequence_features = tf.parse_single_sequence_example(
+
+  features = tf.parse_single_example(
       serialized=serialized_example,
-      context_features=context_features_def,
-      sequence_features=sequence_features_def)
+      features=features_def)
   return {
-    "width": tf.cast(context_features["width"], tf.float32),
-    "height": tf.cast(context_features["height"], tf.float32),
-    "num_players": tf.cast(context_features["num_players"], tf.float32),
-    "num_turns": tf.cast(context_features["num_turns"], tf.int32),
-    "board": tf.cast(sequence_features["board"], tf.float32),
-    "army_count": tf.cast(sequence_features["army_count"], tf.float32),
-    "land_count": tf.cast(sequence_features["land_count"], tf.float32),
-    "label": tf.cast(context_features["label"], tf.float32)
+    "width": tf.cast(features["width"], tf.float32),
+    "height": tf.cast(features["height"], tf.float32),
+    "num_players": tf.cast(features["num_players"], tf.float32),
+    "num_turns": tf.cast(features["num_turns"], tf.int32),
+    "board": tf.cast(features["board"], tf.float32),
+    "army_count": tf.cast(features["army_count"], tf.float32),
+    "land_count": tf.cast(features["land_count"], tf.float32),
+    "label": tf.cast(features["label"], tf.float32)
   }
 
 
@@ -61,12 +59,12 @@ def get_inputs(batch_size):
 
     features = read_and_decode(filename_queue)
 
-    return tf.train.batch(
+    return tf.train.shuffle_batch(
         features,
         batch_size=batch_size,
         num_threads=1,
-        capacity=500 + 3 * batch_size,
-        dynamic_pad=True)
+        capacity=10000,
+        min_after_dequeue=2000)
 
 
 def main(unused_argv):
