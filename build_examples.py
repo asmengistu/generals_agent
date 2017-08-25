@@ -23,13 +23,13 @@ counters = defaultdict(int)
 
 
 def _int64_feature(value):
-  if type(value) == int:
+  if type(value) == int or type(value) == np.int64:
     value = [value]
   return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
 
 
 def _float_feature(value):
-  if type(value) == float:
+  if type(value) == float or type(value) == np.float64:
     value = [value]
   return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
@@ -77,37 +77,35 @@ def widenScoreboard(scoreboard):
   return new_board
 
 
-def build_examples(model, hero_probs, examples_per_game, only_live=False):
+def build_examples(model, hero_probs, examples_per_game, only_live=True):
   """Builds a TensorFlow.Example message from the model."""
-  turn_clip = np.random.randint(GioConstants.min_time,
-                                min(GioConstants.max_time,
-                                    0.95 * model.num_turns))
-  # model.clipBoard(turn_clip)
-  scoreboard = model.getScoreBoardAtTurn(turn_clip)
-  if only_live:
-    # Player-vector. 1 if player at index is alive.
-    live_players = (scoreboard['army'][-1] > 0).astype(int)
-    # Update hero probabilities to ensure we always select a live player.
-    hero_probs = hero_probs * live_players
-    # Can't have more examples than live players if only_live.
-    examples_per_game = min(np.sum(live_players), examples_per_game)
-  hero_probs /= np.sum(hero_probs)
-  # Point of view (chosen from rank with hero_probs).
-  heroes = np.random.choice(model.num_players,
-                            examples_per_game,
-                            replace=False,
-                            p=hero_probs)
+  valid_turns_range = range(
+      GioConstants.min_time,
+      int(min(GioConstants.max_time, 0.95 * model.num_turns)))
+  turn_snapshots = np.random.choice(valid_turns_range,
+                                    examples_per_game,
+                                    replace=False)
   examples = []
-  for hero in heroes:
-    # Clip the number of turns
-    board = model.getBoardViewAtTurn(hero, turn_clip)
-    normalize(board)
+  for turn_snapshot in turn_snapshots:
+    scoreboard = model.getScoreBoardAtTurn(turn_snapshot)
+    if only_live:
+      # Player-vector. 1 if player at index is alive.
+      live_players = (scoreboard['army'][-1] > 0).astype(int)
+      # Update hero probabilities to ensure we always select a live player.
+      hero_probs = hero_probs * live_players
+    hero_probs /= np.sum(hero_probs)
+    # Point of view (chosen from rank with hero_probs).
+    hero = np.random.choice(model.num_players, p=hero_probs)
+
+    board = model.getBoardViewAtTurn(hero, turn_snapshot)
     army = widenScoreboard(switchView(scoreboard['army'], hero))
     forts = widenScoreboard(switchView(scoreboard['forts'], hero))
     land = widenScoreboard(switchView(scoreboard['land'], hero))
-    army, land = map(minMaxNorm, (army, land))
     label = np.where(np.array(model.ranks) == hero)[0]
 
+    normalize(board)
+    # Normalize army/land
+    army, land = map(minMaxNorm, (army, land))
     width, height = model.getMapSize()
     # Set-up empty board with max-size.
     max_board = np.zeros((GioConstants.max_width,
@@ -127,12 +125,13 @@ def build_examples(model, hero_probs, examples_per_game, only_live=False):
           'width': _int64_feature(width),
           'height': _int64_feature(height),
           'num_players': _int64_feature(model.num_players),
-          'num_turns': _int64_feature(turn_clip),
+          'num_turns': _int64_feature(turn_snapshot),
           'board': _float_feature(flattened_board),
           'army_count': _float_feature(army),
           'fort_count': _float_feature(forts),
           'land_count': _float_feature(land),
-          # Label is the index in the rank vector.
+          # Label is the index in the rank vector in 'hero' mode, or the index
+          # of the winning player in 'god' mode.
           'label': _int64_feature(label)
         })))
   return examples
@@ -148,8 +147,6 @@ def write_examples(game_ids, name, bias_hero=False):
     for game_id in game_ids:
       model = get_model(game_id)
       if not valid_game(model):
-        continue
-      if model.num_players != 8:
         continue
       probs = np.ones(model.num_players)
       if bias_hero:
@@ -237,8 +234,7 @@ if __name__ == '__main__':
       '--examples_per_game',
       type=int,
       default=1,
-      help="Number of examples per game. Each example will be point-of-view "
-           "some player, sampled without replacement."
+      help="Number of examples per game."
   )
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)

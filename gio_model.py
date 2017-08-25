@@ -95,6 +95,9 @@ class GioModel(object):
     self.board_ = self.board_[:turn, :, :, :]
     self.num_turns = turn
 
+  def getBoard(self):
+    return self.board_
+
   def getBoardViewAtTurn(self, player, turn, new_board=None):
     """Returns a 1st persion view from `player`s POV. Fog of war is type 0."""
     if new_board is None:

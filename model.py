@@ -6,24 +6,8 @@ from constants import GioConstants
 
 import tensorflow as tf
 
-RNN_HIDDEN = 256
-RNN_STACK_SIZE = 2
-GRID_RNN_SIZE = 32
-BOARD_RNN_SIZE = 128
 CONV_FC_SIZES = [512, 256]
-FINAL_FC_SIZES = [512, 256]
-
-
-def get_rnn_cell(reuse=False, cell_size=RNN_HIDDEN):
-  cell = tf.contrib.rnn.BasicLSTMCell(cell_size, reuse=reuse)
-  return tf.contrib.rnn.DropoutWrapper(cell, 0.5)
-
-
-def get_rnn_stack(reuse=False):
-  cells = []
-  for i in range(RNN_STACK_SIZE):
-    cells.append(get_rnn_cell())
-  return tf.contrib.rnn.MultiRNNCell(cells)
+FINAL_FC_SIZES = [256, 128]
 
 
 def conv(inputs, filters):
@@ -72,67 +56,30 @@ def get_loss(features):
   types_one_hot = tf.one_hot(tf.cast(board[:, :, :, 2] + 1, tf.int32),
                              depth=7)
   board = tf.concat([army, owners_one_hot, types_one_hot], 3)
+  print(board.get_shape())
 
-  def apply_conv(reuse=True):
+  def apply_conv():
     # Will be the final layer from the conv stack.
     layer = None
-    with tf.variable_scope("board_conv_stack", reuse=reuse):
+    with tf.variable_scope("board_conv_stack"):
       conv_1 = conv(board, 32)
       pool_1 = pool(conv_1)
       conv_2 = conv(pool_1, 64)
       pool_2 = pool(conv_2)
       conv_3 = conv(pool_2, 128)
       pool_3 = pool(conv_3)
-      layer = tf.reshape(pool_3, [-1, 4 * 4 * 128])
+      conv_4 = conv(pool_3, 256)
+      pool_4 = pool(conv_4)
+      layer = tf.reshape(pool_4, [-1, 2 * 2 * 256])
 
-    with tf.variable_scope("board_fc", reuse=reuse):
+    with tf.variable_scope("board_fc"):
       for idx, size in enumerate(CONV_FC_SIZES):
         layer = tf.contrib.layers.fully_connected(inputs=layer,
                                                   num_outputs=size)
     # ret shape is [batch_size, CONV_FC_SIZES[-1]]
     return layer
 
-  def apply_2d_lstm(reuse=True):
-    row_outs = tf.zeros([GioConstants.batch_size, 0, GRID_RNN_SIZE])
-    col_outs = tf.zeros([GioConstants.batch_size, 0, GRID_RNN_SIZE])
-    # Simple LSTM cells per row where we collect the final output.
-    # Same for columns. We will combine each with a bidirectional LSTM later.
-    for idx in range(32):
-      with tf.variable_scope("board_2d_lstm_" + str(idx), reuse=reuse):
-        with tf.variable_scope("2d_cell") as cell_scope:
-          cell = get_rnn_cell(reuse=reuse, cell_size=GRID_RNN_SIZE)
-        rows = board[:, idx, :, :]  # Shape (batch, 32, 17)
-        cols = board[:, :, idx, :]  # Shape (batch, 32, 17)
-        with tf.variable_scope(cell_scope, reuse=False):
-          row_outputs, _ = tf.contrib.rnn.static_rnn(cell,
-                                                     tf.unstack(rows, axis=1),
-                                                     dtype=tf.float32)
-        # Share weights between row-wise/col-wise cells.
-        with tf.variable_scope(cell_scope, reuse=True):
-          col_outputs, _ = tf.contrib.rnn.static_rnn(cell,
-                                                     tf.unstack(cols, axis=1),
-                                                     dtype=tf.float32)
-        last_out_row = tf.reshape(
-            row_outputs[-1],
-            [GioConstants.batch_size, 1, GRID_RNN_SIZE])
-        last_out_col = tf.reshape(
-            col_outputs[-1],
-            [GioConstants.batch_size, 1, GRID_RNN_SIZE])
-        row_outs = tf.concat([last_out_row, row_outs], 1)
-        col_outs = tf.concat([last_out_col, col_outs], 1)
-
-    # Shape (batch, 32, GRID_RNN_SIZE*2). Run bidirectional RNN on these.
-    grid_out = tf.concat([row_outs, col_outs], 2)
-    board_rnn_out = None
-    with tf.variable_scope("board_summary_lstm", reuse=reuse):
-      cell_fw = get_rnn_cell(reuse=reuse, cell_size=BOARD_RNN_SIZE)
-      cell_bw = get_rnn_cell(reuse=reuse, cell_size=BOARD_RNN_SIZE)
-      outputs, _, _ = tf.contrib.rnn.static_bidirectional_rnn(
-          cell_fw, cell_bw, tf.unstack(grid_out, axis=1), dtype=tf.float32)
-      board_rnn_out = outputs[-1]
-    return board_rnn_out
-
-  processed_board = apply_conv(False)
+  processed_board = apply_conv()
   net = tf.concat([net, processed_board], 1)
 
   # Final FC layers.
@@ -144,12 +91,21 @@ def get_loss(features):
   label = tf.reshape(label, [-1, 1])
   loss = tf.losses.mean_squared_error(labels=label,
                                       predictions=rank_preds)
+
   tf.summary.scalar("loss", tf.reduce_mean(loss))
 
-  tf.summary.scalar("info/num_players_avg",
-                    tf.reduce_mean(features["num_players"]))
-  tf.summary.scalar("info/num_turns_avg",
-                    tf.reduce_mean(num_turns))
+  tf.summary.scalar(
+      "info/num_players_avg",
+      tf.reduce_mean(features["num_players"]))
+  tf.summary.scalar(
+      "info/num_turns_avg",
+      tf.reduce_mean(num_turns))
+  tf.summary.scalar(
+      "info/avg_live_players",
+      tf.reduce_mean(
+          tf.reduce_sum(tf.cast(features["army_count"] > 0, tf.float32),
+                        axis=1))
+  )
 
   tf.summary.scalar(
       "accuracy",

@@ -14,7 +14,7 @@ import tensorflow as tf
 
 FLAGS = None
 
-LEARNING_RATE = 0.0002
+LEARNING_RATE = 0.0001
 
 
 def read_and_decode(filename_queue):
@@ -92,11 +92,7 @@ def main(unused_argv):
             cluster=cluster)):
       loss = model.get_loss(get_inputs(GioConstants.batch_size))
 
-      # for v in tf.trainable_variables():
-      #   tf.summary.histogram("Vars/" + v.name, v)
-
       global_step = tf.contrib.framework.get_or_create_global_step()
-
       train_op = tf.train.AdagradOptimizer(LEARNING_RATE).minimize(
           loss, global_step=global_step)
 
